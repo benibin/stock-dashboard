@@ -1,4 +1,3 @@
-
 module.exports = async function handler(req, res) {
   try {
     const raw = String(req.query.symbols || 'SPY,QQQ,BTC-USD,ETH-USD');
