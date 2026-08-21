@@ -1,68 +1,17 @@
 module.exports = async function handler(req, res) {
   try {
-    const headers = {
-      'User-Agent': 'Mozilla/5.0',
-      'Accept': 'application/json,text/plain,*/*',
-      'Referer': 'https://www.nasdaq.com/market-activity/stocks/screener'
-    };
-    async function fetchExchange(exchange) {
-      const url = `https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=5000&exchange=${exchange}&download=true`;
-      const r = await fetch(url, { headers });
-      if (!r.ok) throw new Error(`${exchange}_scan_failed_${r.status}`);
-      const j = await r.json();
-      return j?.data?.rows || [];
-    }
-    const [nasdaq, nyse] = await Promise.all([fetchExchange('nasdaq'), fetchExchange('nyse')]);
-    const parseNum = (v) => {
-      if (v == null) return null;
-      const n = Number(String(v).replace(/[$,%+,]/g, '').trim());
-      return Number.isFinite(n) ? n : null;
-    };
-    const rows = [...nasdaq, ...nyse].map(r => ({
-      symbol: String(r.symbol || '').trim().toUpperCase(),
-      name: r.name || '',
-      exchange: r.exchange || '',
-      sector: r.sector || 'Unknown',
-      industry: r.industry || 'Unknown',
-      price: parseNum(r.lastsale ?? r.lastSalePrice),
-      changePercent: parseNum(r.pctchange ?? r.percentageChange),
-      volume: parseNum(r.volume),
-      marketCap: parseNum(r.marketCap)
-    })).filter(x => x.symbol && Number.isFinite(x.price) && Number.isFinite(x.changePercent));
-
-    const filtered = rows.filter(x => x.price >= 2 && (x.marketCap == null || x.marketCap >= 100000000) && (x.volume == null || x.volume >= 100000));
-    const sectorMap = new Map();
-    for (const x of filtered) {
-      const key = x.sector || 'Unknown';
-      if (!sectorMap.has(key)) sectorMap.set(key, []);
-      sectorMap.get(key).push(x);
-    }
-    const sectors = [...sectorMap.entries()].map(([sector, list]) => {
-      const vals = list.map(x => x.changePercent).filter(Number.isFinite);
-      const positive = vals.filter(v => v > 0).length;
-      const avg = vals.reduce((a,b)=>a+b,0) / vals.length;
-      const sorted = [...vals].sort((a,b)=>a-b);
-      const median = sorted.length ? sorted[Math.floor(sorted.length/2)] : 0;
-      const breadth = vals.length ? positive / vals.length * 100 : 0;
-      const score = avg * 0.55 + median * 0.25 + (breadth - 50) * 0.04;
-      const leaders = [...list].sort((a,b) => {
-        const aScore = (a.changePercent || 0) + Math.log10(Math.max(a.volume || 1, 1))*0.12;
-        const bScore = (b.changePercent || 0) + Math.log10(Math.max(b.volume || 1, 1))*0.12;
-        return bScore - aScore;
-      }).slice(0, 8);
-      return { sector, score, avgChange: avg, medianChange: median, breadth, count: vals.length, leaders };
-    }).filter(x => x.count >= 3).sort((a,b)=>b.score-a.score);
-
-    const topMovers = [...filtered].sort((a,b)=>b.changePercent-a.changePercent).slice(0, 100);
-    res.setHeader('Cache-Control', 'no-store');
-    res.status(200).json({
-      fetchedAt: Date.now(),
-      source: 'Nasdaq stock screener API',
-      universeCount: filtered.length,
-      sectors: sectors.slice(0, 20),
-      topMovers
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message || 'market_scan_failed' });
-  }
+    const headers = {'User-Agent':'Mozilla/5.0','Accept':'application/json,text/plain,*/*','Referer':'https://www.nasdaq.com/market-activity/stocks/screener'};
+    const parseNum=v=>{if(v==null)return null;const n=Number(String(v).replace(/[$,%+,]/g,'').trim());return Number.isFinite(n)?n:null};
+    async function fetchExchange(exchange){const u=`https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=5000&exchange=${exchange}&download=true`;const r=await fetch(u,{headers});if(!r.ok)throw Error(`${exchange}_scan_failed_${r.status}`);const j=await r.json();return j?.data?.rows||[]}
+    async function liveQuotes(symbols){const out=new Map();for(let i=0;i<symbols.length;i+=40){const part=symbols.slice(i,i+40);const u=`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(part[0])}?interval=5m&range=1d&includePrePost=true`;for(const s of part){try{const rr=await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(s)}?interval=5m&range=1d&includePrePost=true`,{headers:{'User-Agent':'Mozilla/5.0'}});if(!rr.ok)continue;const jj=await rr.json(),r=jj?.chart?.result?.[0],m=r?.meta;if(!r||!m)continue;const ts=r.timestamp||[],cl=r.indicators?.quote?.[0]?.close||[];let live=null;for(let k=cl.length-1;k>=0;k--)if(Number.isFinite(cl[k])){live=cl[k];break}const regular=Number(m.regularMarketPrice),prev=Number(m.chartPreviousClose??m.previousClose);let phase='regular';const now=Math.floor(Date.now()/1000),period=m.currentTradingPeriod||{};if(period.pre&&now>=period.pre.start&&now<period.regular.start)phase='pre';else if(period.post&&now>=period.regular.end&&now<=period.post.end)phase='post';const p=Number.isFinite(live)?live:regular,chg=Number.isFinite(p)&&Number.isFinite(prev)&&prev?((p-prev)/prev*100):null;out.set(s,{livePrice:p,changePercent:chg,phase})}catch{}}}return out}
+    const [nasdaq,nyse]=await Promise.all([fetchExchange('nasdaq'),fetchExchange('nyse')]);
+    const rows=[...nasdaq,...nyse].map(r=>({symbol:String(r.symbol||'').trim().toUpperCase(),name:r.name||'',exchange:r.exchange||'',sector:r.sector||'Unknown',industry:r.industry||'Unknown',price:parseNum(r.lastsale??r.lastSalePrice),changePercent:parseNum(r.pctchange??r.percentageChange),volume:parseNum(r.volume),marketCap:parseNum(r.marketCap)})).filter(x=>x.symbol&&Number.isFinite(x.price)&&Number.isFinite(x.changePercent));
+    const filtered=rows.filter(x=>x.price>=2&&(x.marketCap==null||x.marketCap>=100000000)&&(x.volume==null||x.volume>=100000));
+    const sm=new Map();for(const x of filtered){if(!sm.has(x.sector))sm.set(x.sector,[]);sm.get(x.sector).push(x)}
+    let sectors=[...sm.entries()].map(([sector,list])=>{const vals=list.map(x=>x.changePercent).filter(Number.isFinite),pos=vals.filter(v=>v>0).length,avg=vals.reduce((a,b)=>a+b,0)/vals.length,sorted=[...vals].sort((a,b)=>a-b),median=sorted[Math.floor(sorted.length/2)]||0,breadth=vals.length?pos/vals.length*100:0,score=avg*.55+median*.25+(breadth-50)*.04;const leaders=[...list].sort((a,b)=>((b.changePercent||0)+Math.log10(Math.max(b.volume||1,1))*.12)-((a.changePercent||0)+Math.log10(Math.max(a.volume||1,1))*.12)).slice(0,8);return {sector,score,regularScore:score,avgChange:avg,medianChange:median,breadth,count:vals.length,leaders}}).filter(x=>x.count>=3).sort((a,b)=>b.score-a.score);
+    const liveSymbols=[...new Set(sectors.slice(0,12).flatMap(x=>x.leaders.slice(0,3).map(z=>z.symbol)))];const live=await liveQuotes(liveSymbols);
+    sectors=sectors.map((sec,idx)=>{const leaders=sec.leaders.map(z=>({...z,...(live.get(z.symbol)||{})}));const lchg=leaders.slice(0,3).map(z=>z.changePercent).filter(Number.isFinite);const liveLeaderAvg=lchg.length?lchg.reduce((a,b)=>a+b,0)/lchg.length:null;const score=idx<12&&Number.isFinite(liveLeaderAvg)?sec.regularScore*.65+liveLeaderAvg*.35:sec.regularScore;return {...sec,leaders,liveLeaderAvg,score}}).sort((a,b)=>b.score-a.score);
+    const topMovers=[...filtered].sort((a,b)=>b.changePercent-a.changePercent).slice(0,100);
+    res.setHeader('Cache-Control','no-store');res.status(200).json({fetchedAt:Date.now(),source:'Nasdaq/NYSE screener + Yahoo 5m extended-hours overlay for sector leaders',universeCount:filtered.length,sectors:sectors.slice(0,20),topMovers});
+  } catch(e){res.status(500).json({error:e.message||'market_scan_failed'})}
 };
